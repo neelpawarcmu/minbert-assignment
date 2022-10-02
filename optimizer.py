@@ -38,7 +38,6 @@ class AdamW(Optimizer):
 
         for group in self.param_groups:
             ## Access hyperparameters from the `group` dictionary
-            alpha = group["lr"]
             beta1, beta2 = group["betas"]
             weight_decay = group["weight_decay"]
             eps = group["eps"]
@@ -53,37 +52,41 @@ class AdamW(Optimizer):
                 # State should be stored in this dictionary
                 state = self.state[p]
 
-            # State initialization
-            if len(state) == 0:
-                state["step"] = 0
-                # Exponential moving average of gradient values
-                state["exp_avg"] = torch.zeros_like(p.data)
-                # Exponential moving average of squared gradient values
-                state["exp_avg_sq"] = torch.zeros_like(p.data)
+                alpha = group["lr"]
+
+                # State initialization
+                if len(state) == 0:
+                    state["step"] = 0
+                    # Exponential moving average of gradient values
+                    state["exp_avg"] = torch.zeros_like(p.data)
+                    # Exponential moving average of squared gradient values
+                    state["exp_avg_sq"] = torch.zeros_like(p.data)
+                
+                exp_avg = state['exp_avg']
+                exp_avg_sq = state['exp_avg_sq']
+
+                # Update first and second moments of the gradients
+                exp_avg = torch.mul(exp_avg, beta1) + (1-beta1) * grad
+                exp_avg_sq = torch.mul(exp_avg_sq, beta2) + (1-beta2) * (grad**2)
+                state['exp_avg'] = exp_avg
+                state['exp_avg_sq'] = exp_avg_sq
+                state["step"] += 1
+
+                # Bias correction
+                # Please note that we are using the "efficient version" given in
+                # https://arxiv.org/abs/1412.6980
+                if group["correct_bias"]:
+                    bias_correction1 =  1 - (beta1 ** state['step'])
+                    bias_correction2 =  1 - (beta2 ** state['step'])
+                    alpha = alpha * (bias_correction2 ** 0.5) / bias_correction1
+
+                # Update parameters
+                denom = exp_avg_sq**0.5 + eps
+                p.data = p.data - alpha * exp_avg / denom
+
+                # Add weight decay after the main gradient-based updates.
+                # Please note that the learning rate should be incorporated into this update.
+                if group["weight_decay"]:
+                    p.data.add_(p.data, alpha=-group["lr"] * weight_decay)
             
-            exp_avg = state['exp_avg']
-            exp_avg_sq = state['exp_avg_sq']
-
-            # Update first and second moments of the gradients
-            exp_avg = torch.mul(exp_avg, beta1) + (1-beta1) * grad
-            exp_avg_sq = torch.mul(exp_avg_sq, beta2) + (1-beta2) * (grad**2)
-            state['exp_avg'] = exp_avg
-            state['exp_avg_sq'] = exp_avg_sq
-            state["step"] += 1
-
-            # Bias correction
-            # Please note that we are using the "efficient version" given in
-            # https://arxiv.org/abs/1412.6980
-            bias_correction1 =  1 - (beta1 ** state['step'])
-            bias_correction2 =  1 - (beta2 ** state['step'])
-            alpha = alpha * (bias_correction2 ** 0.5) / bias_correction1
-
-            # Update parameters
-            denom = exp_avg_sq**0.5 + eps
-            p.data = p.data - alpha * exp_avg / denom
-
-            # Add weight decay after the main gradient-based updates.
-            # Please note that the learning rate should be incorporated into this update.
-            p.data.add_(p.data, alpha=-group["lr"] * weight_decay)
-          
         return loss
