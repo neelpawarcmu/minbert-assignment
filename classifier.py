@@ -30,13 +30,10 @@ class BertSentClassifier(torch.nn.Module):
         self.num_labels = config.num_labels
         self.bert = BertModel.from_pretrained('bert-base-uncased')
         # (done)
+        self.batchnorm = torch.nn.BatchNorm1d(num_features=config.hidden_size)
         self.dropout = torch.nn.Dropout(p=config.hidden_dropout_prob, inplace=False) #todo change to True
         self.linear = torch.nn.Linear(config.hidden_size, config.num_labels)
         self.logsoftmax = torch.nn.LogSoftmax(dim=1) # since NLL loss requires log probs
-        # print('-'*40)
-        # print('config', config)
-        # print('-'*40)
-        # pretrain mode does not require updating bert paramters.
         for param in self.bert.parameters():
             if config.option == 'pretrain':
                 param.requires_grad = False
@@ -48,7 +45,31 @@ class BertSentClassifier(torch.nn.Module):
     def forward(self, input_ids, attention_mask):
         # done
         # the final bert contextualize embedding is the hidden state of [CLS] token (the first token)
-        out = self.bert(input_ids, attention_mask)['pooler_output']
+        bert_out = self.bert(input_ids, attention_mask)
+        lhs = bert_out['last_hidden_state']
+        bs, tokens, token_dim = lhs.shape
+
+        # print('attention_mask shape', attention_mask.shape)
+        am = attention_mask.type(torch.float32).reshape(bs, tokens)
+        pooler_out = bert_out['pooler_output']
+        # print('pooler_out shape', pooler_out.shape)
+        # print('am shape', am.shape)
+        # print('lhs shape', lhs.shape)
+        prod = torch.matmul(am, lhs).sum(dim=1)
+        # print('')
+        # print('--'*40)
+        # print('mean of pooler_out', torch.mean(pooler_out))
+        # print('sum of pooler_out', torch.sum(pooler_out))
+        # print('mean of prod', torch.mean(prod))
+        # print('sum of prod', torch.sum(prod))
+        pooler_out, prod = self.batchnorm(pooler_out), self.batchnorm(prod)
+        # print('')
+        # print('mean of pooler_out', torch.mean(pooler_out))
+        # print('sum of pooler_out', torch.sum(pooler_out))
+        # print('mean of prod', torch.mean(prod))
+        # print('sum of prod', torch.sum(prod))
+        # print('prod shape', prod.shape)
+        out = pooler_out + prod
         out = self.dropout(out)
         out = self.linear(out)
         out = self.logsoftmax(out)
@@ -187,6 +208,15 @@ def train(args):
     lr = args.lr
     ## specify the optimizer
     optimizer = AdamW(model.parameters(), lr=lr)
+
+
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, 
+        mode='min', 
+        factor=0.9, 
+        patience=2,
+        verbose=True)
+
     best_dev_acc = 0
 
     ## run for the specified number of epochs
@@ -220,6 +250,8 @@ def train(args):
         if dev_acc > best_dev_acc:
             best_dev_acc = dev_acc
             save_model(model, optimizer, args, config, args.filepath)
+
+        scheduler.step(dev_acc)
 
         print(f"epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
         print('-'*60)
